@@ -10,7 +10,7 @@
 // 3. Copie a URL gerada e cole no app (ícone ⚙️)
 // ============================================================
 
-const SPREADSHEET_ID = 'COLE_O_ID_DA_SUA_PLANILHA_AQUI';
+const SPREADSHEET_ID = '1AnvSgC1HtBCPewZvHqovmrUvn63xaNsDggCfrW1hWv8';
 
 // ============================================================
 // ROTEADOR PRINCIPAL
