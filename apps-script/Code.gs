@@ -323,12 +323,16 @@ function removeListaItem(id) {
 function scanNfe(qrUrl) {
   if (!qrUrl) return { error: true, mensagem: 'qrUrl não fornecida' };
 
+  // Sanitize: remove invisible/control characters that jsQR sometimes appends
+  qrUrl = qrUrl.trim().replace(/[\x00-\x1F\x7F]/g, '');
+  Logger.log('scan_nfe URL recebida: ' + qrUrl);
+
   // Validar URL
   let urlObj;
-  try { urlObj = new URL(qrUrl); } catch (_) { return { error: true, mensagem: 'URL inválida' }; }
+  try { urlObj = new URL(qrUrl); } catch (_) { return { error: true, mensagem: 'URL inválida: ' + qrUrl.substring(0, 80) }; }
 
-  if (urlObj.protocol !== 'https:') return { error: true, mensagem: 'Apenas HTTPS permitido' };
-  if (!urlObj.hostname.endsWith('.gov.br')) return { error: true, mensagem: 'URL não é de portal SEFAZ (.gov.br)' };
+  if (urlObj.protocol !== 'https:') return { error: true, mensagem: 'Apenas HTTPS permitido (recebido: ' + urlObj.protocol + ')' };
+  if (!urlObj.hostname.endsWith('.gov.br')) return { error: true, mensagem: 'Domínio não é .gov.br: ' + urlObj.hostname };
 
   const bloqueados = [/^localhost$/i, /^127\./, /^0\.0\.0\.0$/, /^192\.168\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./];
   if (bloqueados.some(r => r.test(urlObj.hostname))) return { error: true, mensagem: 'URL não permitida' };
