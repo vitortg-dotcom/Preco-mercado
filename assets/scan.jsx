@@ -152,8 +152,51 @@ function ScanQRFlow({ onDone, onClose }) {
     }
   };
 
-  if (stage === 'camera')  return <CameraScreen mode="qr" onCapture={capture} onClose={onClose}/>;
-  if (stage === 'loading') return <LoadingOverlay title="Consultando SEFAZ..." sub="Importando itens da nota"/>;
+  if (stage === 'camera')     return <CameraScreen mode="qr" onCapture={capture} onClose={onClose}/>;
+  if (stage === 'loading')    return <LoadingOverlay title="Consultando SEFAZ..." sub="Importando itens da nota"/>;
+  if (stage === 'foto-nota')  return <ScanFotoNotaFlow onDone={onDone} onClose={onClose}/>;
+  if (stage === 'error') return (
+    <div className="screen-container">
+      <div className="topbar">
+        <button className="icon-btn" onClick={onClose}><Icon name="back" size={18}/></button>
+        <div className="brand" style={{ fontSize:15 }}>Link do QR quebrado</div>
+        <div style={{width:38}}/>
+      </div>
+      <div className="screen">
+        <div className="card" style={{ textAlign:'center', padding:32 }}>
+          <div style={{ fontWeight:600, marginBottom:8 }}>SEFAZ não respondeu</div>
+          <div className="muted small" style={{ marginBottom:24 }}>{errMsg}</div>
+          <button className="btn primary block" onClick={() => setStage('foto-nota')}>
+            <Icon name="camera" size={16}/> Fotografar a nota impressa
+          </button>
+          <button className="btn block" style={{ marginTop:10 }} onClick={onClose}>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  );
+  return <NFEReview nfe={nfe} onSave={onDone} onCancel={onClose}/>;
+}
+
+// ============ Foto da nota impressa: camera → loading → review ============
+function ScanFotoNotaFlow({ onDone, onClose }) {
+  const [stage, setStage] = useStateCam('camera');
+  const [nfe, setNfe]     = useStateCam(null);
+  const [errMsg, setErr]  = useStateCam('');
+
+  const capture = async ({ imageBase64 }) => {
+    setStage('loading');
+    try {
+      const data = await window.API.call('ocr_nota', { imageBase64 });
+      setNfe(data);
+      setStage('review');
+    } catch (e) {
+      setErr(e.message);
+      setStage('error');
+    }
+  };
+
+  if (stage === 'camera')  return <CameraScreen mode="photo" onCapture={capture} onClose={onClose}/>;
+  if (stage === 'loading') return <LoadingOverlay title="Lendo nota fiscal..." sub="Gemini identificando os itens"/>;
   if (stage === 'error') return (
     <div className="screen-container">
       <div className="topbar">
@@ -165,7 +208,8 @@ function ScanQRFlow({ onDone, onClose }) {
         <div className="card" style={{ textAlign:'center', padding:32 }}>
           <div style={{ fontWeight:600, marginBottom:8 }}>Não foi possível ler a nota</div>
           <div className="muted small" style={{ marginBottom:24 }}>{errMsg}</div>
-          <button className="btn primary block" onClick={onClose}>Voltar</button>
+          <button className="btn primary block" onClick={() => setStage('camera')}>Tentar novamente</button>
+          <button className="btn block" style={{ marginTop:10 }} onClick={onClose}>Cancelar</button>
         </div>
       </div>
     </div>
