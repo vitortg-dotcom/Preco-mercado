@@ -19,14 +19,20 @@ function CameraScreen({ mode, onCapture, onClose }) {
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
   }
 
-  // Start camera
+  // Start camera — request high resolution for dense NFC-e QR codes
   useEffectCam(() => {
     let active = true;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCamError('getUserMedia não suportado neste navegador.');
       return;
     }
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+    navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+      }
+    })
       .then(stream => {
         if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
@@ -40,8 +46,7 @@ function CameraScreen({ mode, onCapture, onClose }) {
     return () => { active = false; stopAll(); };
   }, []);
 
-  // QR scan loop — starts once video is playing
-  // Throttled to ~8fps: gives camera time to focus and reduces CPU on mobile
+  // QR scan loop — crop to reticle area + contrast boost for dense NFC-e codes
   useEffectCam(() => {
     if (!ready || mode !== 'qr') return;
     let active = true;
@@ -53,21 +58,38 @@ function CameraScreen({ mode, onCapture, onClose }) {
       if (!video || !canvas || video.readyState < video.HAVE_ENOUGH_DATA || !video.videoWidth) {
         rafRef.current = requestAnimationFrame(scan); return;
       }
-      canvas.width  = video.videoWidth;
-      canvas.height = video.videoHeight;
+
+      // Crop to center 75% — where the reticle sits; ignores distracting edges
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      const cw = Math.round(vw * 0.75);
+      const ch = Math.round(vh * 0.75);
+      const cx = Math.round((vw - cw) / 2);
+      const cy = Math.round((vh - ch) / 2);
+      canvas.width  = cw;
+      canvas.height = ch;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      // attemptBoth: tries normal + inverted, catches more QR codes under varied lighting
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+      ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
+
+      // Contrast boost: converts to grayscale + stretches range
+      // helps jsQR with faded prints, shadows and mixed lighting
+      const imageData = ctx.getImageData(0, 0, cw, ch);
+      const px = imageData.data;
+      for (let i = 0; i < px.length; i += 4) {
+        const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+        const v = Math.min(255, Math.max(0, (gray - 128) * 1.4 + 128));
+        px[i] = px[i + 1] = px[i + 2] = v;
+      }
+
+      const code = jsQR(imageData.data, cw, ch, { inversionAttempts: 'attemptBoth' });
       if (code && code.data) {
         active = false;
         stopAll();
         onCapture({ qrUrl: code.data });
         return;
       }
-      // ~8fps — scanning every frame on mobile causes blur and misses more than it catches
-      setTimeout(() => { if (active) { rafRef.current = requestAnimationFrame(scan); } }, 120);
+      // 200ms gives the autofocus time to settle between attempts
+      setTimeout(() => { if (active) { rafRef.current = requestAnimationFrame(scan); } }, 200);
     };
 
     rafRef.current = requestAnimationFrame(scan);
