@@ -21,7 +21,7 @@ window.API = (() => {
     const body  = token ? { token, ...payload } : { ...payload };
     // scan_nfe and ocr_gondola must never silently fall back to mock —
     // their callers handle errors explicitly and show them to the user.
-    const noMockFallback = action === 'scan_nfe' || action === 'ocr_gondola';
+    const noMockFallback = action === 'scan_nfe' || action === 'ocr_gondola' || action === 'ocr_nota';
     try {
       const resp = await fetch(url + '?action=' + encodeURIComponent(action), {
         method: 'POST',
