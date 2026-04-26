@@ -323,19 +323,23 @@ function removeListaItem(id) {
 function scanNfe(qrUrl) {
   if (!qrUrl) return { error: true, mensagem: 'qrUrl não fornecida' };
 
-  // Sanitize: remove invisible/control characters that jsQR sometimes appends
-  qrUrl = qrUrl.trim().replace(/[\x00-\x1F\x7F]/g, '');
+  // Sanitize: strip control chars + encode literal | pipes common in NFC-e QR codes
+  // (browsers accept | unencoded, but strict parsers don't)
+  qrUrl = qrUrl.trim().replace(/[\x00-\x1F\x7F]/g, '').replace(/\|/g, '%7C');
   Logger.log('scan_nfe URL recebida: ' + qrUrl);
 
-  // Validar URL
-  let urlObj;
-  try { urlObj = new URL(qrUrl); } catch (_) { return { error: true, mensagem: 'URL inválida: ' + qrUrl.substring(0, 80) }; }
+  // Validar com regex — evita dependência de new URL() que não existe no runtime Rhino
+  const m = qrUrl.match(/^(https?):\/\/([^\/\?#:]+)([\/:?#].*)?$/i);
+  if (!m) return { error: true, mensagem: 'URL inválida: ' + qrUrl.substring(0, 100) };
 
-  if (urlObj.protocol !== 'https:') return { error: true, mensagem: 'Apenas HTTPS permitido (recebido: ' + urlObj.protocol + ')' };
-  if (!urlObj.hostname.endsWith('.gov.br')) return { error: true, mensagem: 'Domínio não é .gov.br: ' + urlObj.hostname };
+  const protocol = m[1].toLowerCase();
+  const hostname = m[2].toLowerCase();
+
+  if (protocol !== 'https') return { error: true, mensagem: 'Apenas HTTPS permitido' };
+  if (!hostname.endsWith('.gov.br')) return { error: true, mensagem: 'Domínio não é .gov.br: ' + hostname };
 
   const bloqueados = [/^localhost$/i, /^127\./, /^0\.0\.0\.0$/, /^192\.168\./, /^10\./, /^172\.(1[6-9]|2\d|3[01])\./, /^169\.254\./];
-  if (bloqueados.some(r => r.test(urlObj.hostname))) return { error: true, mensagem: 'URL não permitida' };
+  if (bloqueados.some(r => r.test(hostname))) return { error: true, mensagem: 'URL não permitida' };
 
   try {
     const resp = UrlFetchApp.fetch(qrUrl, {
