@@ -41,6 +41,7 @@ function CameraScreen({ mode, onCapture, onClose }) {
   }, []);
 
   // QR scan loop — starts once video is playing
+  // Throttled to ~8fps: gives camera time to focus and reduces CPU on mobile
   useEffectCam(() => {
     if (!ready || mode !== 'qr') return;
     let active = true;
@@ -49,7 +50,7 @@ function CameraScreen({ mode, onCapture, onClose }) {
       if (!active) return;
       const video  = videoRef.current;
       const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < video.HAVE_ENOUGH_DATA) {
+      if (!video || !canvas || video.readyState < video.HAVE_ENOUGH_DATA || !video.videoWidth) {
         rafRef.current = requestAnimationFrame(scan); return;
       }
       canvas.width  = video.videoWidth;
@@ -57,14 +58,16 @@ function CameraScreen({ mode, onCapture, onClose }) {
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      // attemptBoth: tries normal + inverted, catches more QR codes under varied lighting
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
       if (code && code.data) {
         active = false;
         stopAll();
         onCapture({ qrUrl: code.data });
         return;
       }
-      rafRef.current = requestAnimationFrame(scan);
+      // ~8fps — scanning every frame on mobile causes blur and misses more than it catches
+      setTimeout(() => { if (active) { rafRef.current = requestAnimationFrame(scan); } }, 120);
     };
 
     rafRef.current = requestAnimationFrame(scan);
