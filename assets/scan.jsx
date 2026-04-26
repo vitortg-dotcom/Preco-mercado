@@ -109,7 +109,7 @@ function CameraScreen({ mode, onCapture, onClose }) {
       </div>
       <div className="camera-view" style={{ position:'relative', overflow:'hidden' }}>
         <video ref={videoRef} playsInline muted style={{
-          position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover'
+          position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover', zIndex:1
         }}/>
         <canvas ref={canvasRef} style={{ display:'none' }}/>
         <div className="camera-reticle"><span/></div>
