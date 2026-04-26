@@ -19,6 +19,9 @@ window.API = (() => {
     // Inclui token no body se configurado
     const token = getToken();
     const body  = token ? { token, ...payload } : { ...payload };
+    // scan_nfe and ocr_gondola must never silently fall back to mock —
+    // their callers handle errors explicitly and show them to the user.
+    const noMockFallback = action === 'scan_nfe' || action === 'ocr_gondola';
     try {
       const resp = await fetch(url + '?action=' + encodeURIComponent(action), {
         method: 'POST',
@@ -31,6 +34,7 @@ window.API = (() => {
       if (data && data.error) throw new Error(data.mensagem || 'Erro no servidor');
       return data;
     } catch (err) {
+      if (noMockFallback) throw err;
       console.warn('API call failed, falling back to mock:', err);
       return handleMock(action, payload);
     }

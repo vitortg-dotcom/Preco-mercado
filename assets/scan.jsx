@@ -1,97 +1,212 @@
 // Camera screens + review — QR and photo flows share the camera shell.
-const { useState: useStateCam, useEffect: useEffectCam } = React;
+const { useState: useStateCam, useEffect: useEffectCam, useRef: useRefCam } = React;
 
 function CameraScreen({ mode, onCapture, onClose }) {
-  // mode: 'qr' | 'photo'
-  const [flash, setFlash] = useStateCam(false);
+  const videoRef  = useRefCam(null);
+  const canvasRef = useRefCam(null);
+  const streamRef = useRefCam(null);
+  const rafRef    = useRefCam(null);
+  const [camError, setCamError] = useStateCam(null);
+  const [ready, setReady]       = useStateCam(false);
+
   const title = mode === 'qr' ? 'Escanear QR da nota' : 'Foto da gôndola';
-  const hint = mode === 'qr'
+  const hint  = mode === 'qr'
     ? 'Aponte para o QR code da nota fiscal'
     : 'Enquadre a etiqueta de preço e o produto';
 
-  // In a real device this would use getUserMedia. For prototype we simulate.
+  function stopAll() {
+    if (rafRef.current)    { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
+  }
+
+  // Start camera
   useEffectCam(() => {
-    if (mode !== 'qr') return;
-    // Simulate QR detection after ~2.2s
-    const t = setTimeout(() => {
-      onCapture({ auto: true });
-    }, 2200);
-    return () => clearTimeout(t);
-  }, [mode]);
+    let active = true;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCamError('getUserMedia não suportado neste navegador.');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+      .then(stream => {
+        if (!active) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        const video = videoRef.current;
+        if (video) {
+          video.srcObject = stream;
+          video.play().then(() => { if (active) setReady(true); });
+        }
+      })
+      .catch(err => { if (active) setCamError('Câmera indisponível: ' + err.message); });
+    return () => { active = false; stopAll(); };
+  }, []);
+
+  // QR scan loop — starts once video is playing
+  useEffectCam(() => {
+    if (!ready || mode !== 'qr') return;
+    let active = true;
+
+    const scan = () => {
+      if (!active) return;
+      const video  = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState < video.HAVE_ENOUGH_DATA) {
+        rafRef.current = requestAnimationFrame(scan); return;
+      }
+      canvas.width  = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      if (code && code.data) {
+        active = false;
+        stopAll();
+        onCapture({ qrUrl: code.data });
+        return;
+      }
+      rafRef.current = requestAnimationFrame(scan);
+    };
+
+    rafRef.current = requestAnimationFrame(scan);
+    return () => { active = false; if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [ready]);
+
+  const capturePhoto = () => {
+    const video  = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const b64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+    stopAll();
+    onCapture({ imageBase64: b64 });
+  };
+
+  if (camError) return (
+    <div className="camera">
+      <div className="camera-top">
+        <button onClick={onClose}><Icon name="x" size={20}/></button>
+        <div className="camera-title">{title}</div>
+        <div style={{width:38}}/>
+      </div>
+      <div className="camera-view" style={{ display:'grid', placeItems:'center' }}>
+        <div style={{ textAlign:'center', color:'#fff', padding:24 }}>
+          <Icon name="camera" size={36}/>
+          <div style={{ marginTop:12, fontSize:14, opacity:.8 }}>{camError}</div>
+          <button className="btn" style={{ marginTop:20, background:'rgba(255,255,255,.15)', color:'#fff' }} onClick={onClose}>Fechar</button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="camera">
       <div className="camera-top">
-        <button onClick={onClose} aria-label="Fechar">
-          <Icon name="x" size={20} />
-        </button>
+        <button onClick={onClose} aria-label="Fechar"><Icon name="x" size={20}/></button>
         <div className="camera-title">{title}</div>
-        <button onClick={() => setFlash(f => !f)} aria-label="Flash"
-          style={{ background: flash ? 'var(--accent)' : 'rgba(255,255,255,0.15)' }}>
-          <Icon name="flash" size={18} />
-        </button>
+        <div style={{width:38}}/>
       </div>
-
-      <div className="camera-view">
-        <div className="camera-reticle"><span /></div>
-        {mode === 'qr' && <div className="camera-scan-line" />}
+      <div className="camera-view" style={{ position:'relative', overflow:'hidden' }}>
+        <video ref={videoRef} playsInline muted style={{
+          position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover'
+        }}/>
+        <canvas ref={canvasRef} style={{ display:'none' }}/>
+        <div className="camera-reticle"><span/></div>
+        {mode === 'qr' && <div className="camera-scan-line"/>}
       </div>
-
       <div className="camera-hint">{hint}</div>
-
       <div className="camera-bar">
-        <button className="camera-side" aria-label="Galeria">
-          <Icon name="list" size={18} />
-        </button>
+        <div style={{width:38}}/>
         {mode === 'qr' ? (
-          <button className="shutter qr" disabled>
-            <div className="shutter-inner" />
-          </button>
+          <button className="shutter qr" disabled><div className="shutter-inner"/></button>
         ) : (
-          <button className="shutter" onClick={() => onCapture()} aria-label="Capturar">
-            <div className="shutter-inner" />
+          <button className="shutter" onClick={capturePhoto} aria-label="Capturar">
+            <div className="shutter-inner"/>
           </button>
         )}
-        <button className="camera-side" aria-label="Virar câmera">
-          <Icon name="flip" size={18} />
-        </button>
+        <div style={{width:38}}/>
       </div>
     </div>
   );
 }
 
-// ============ QR scan: loading → NFE review ============
+// ============ QR scan: camera → loading → review ============
 function ScanQRFlow({ onDone, onClose }) {
-  const [stage, setStage] = useStateCam('camera'); // camera | loading | review
-  const [nfe, setNfe] = useStateCam(null);
+  const [stage, setStage] = useStateCam('camera');
+  const [nfe, setNfe]     = useStateCam(null);
+  const [errMsg, setErr]  = useStateCam('');
 
-  const capture = async () => {
+  const capture = async ({ qrUrl }) => {
     setStage('loading');
-    const data = await window.API.call('scan_nfe', { qrUrl: 'mock' });
-    setNfe(data);
-    setStage('review');
+    try {
+      const data = await window.API.call('scan_nfe', { qrUrl });
+      setNfe(data);
+      setStage('review');
+    } catch (e) {
+      setErr(e.message);
+      setStage('error');
+    }
   };
 
-  if (stage === 'camera') return <CameraScreen mode="qr" onCapture={capture} onClose={onClose} />;
-  if (stage === 'loading') return <LoadingOverlay title="Consultando SEFAZ..." sub="Importando itens da nota" />;
-  return <NFEReview nfe={nfe} onSave={onDone} onCancel={onClose} />;
+  if (stage === 'camera')  return <CameraScreen mode="qr" onCapture={capture} onClose={onClose}/>;
+  if (stage === 'loading') return <LoadingOverlay title="Consultando SEFAZ..." sub="Importando itens da nota"/>;
+  if (stage === 'error') return (
+    <div className="screen-container">
+      <div className="topbar">
+        <button className="icon-btn" onClick={onClose}><Icon name="back" size={18}/></button>
+        <div className="brand" style={{ fontSize:15 }}>Erro na leitura</div>
+        <div style={{width:38}}/>
+      </div>
+      <div className="screen">
+        <div className="card" style={{ textAlign:'center', padding:32 }}>
+          <div style={{ fontWeight:600, marginBottom:8 }}>Não foi possível ler a nota</div>
+          <div className="muted small" style={{ marginBottom:24 }}>{errMsg}</div>
+          <button className="btn primary block" onClick={onClose}>Voltar</button>
+        </div>
+      </div>
+    </div>
+  );
+  return <NFEReview nfe={nfe} onSave={onDone} onCancel={onClose}/>;
 }
 
-// ============ Photo gôndola: loading → gondola review ============
+// ============ Photo gôndola: camera → loading → review ============
 function ScanPhotoFlow({ onDone, onClose }) {
-  const [stage, setStage] = useStateCam('camera');
+  const [stage, setStage]   = useStateCam('camera');
   const [result, setResult] = useStateCam(null);
+  const [errMsg, setErr]    = useStateCam('');
 
-  const capture = async () => {
+  const capture = async ({ imageBase64 }) => {
     setStage('loading');
-    const data = await window.API.call('ocr_gondola', { imageBase64: 'mock' });
-    setResult(data);
-    setStage('review');
+    try {
+      const data = await window.API.call('ocr_gondola', { imageBase64 });
+      setResult(data);
+      setStage('review');
+    } catch (e) {
+      setErr(e.message);
+      setStage('error');
+    }
   };
 
-  if (stage === 'camera') return <CameraScreen mode="photo" onCapture={capture} onClose={onClose} />;
-  if (stage === 'loading') return <LoadingOverlay title="Analisando imagem..." sub="Gemini detectando produtos e preços" />;
-  return <GondolaReview result={result} onSave={onDone} onCancel={onClose} />;
+  if (stage === 'camera')  return <CameraScreen mode="photo" onCapture={capture} onClose={onClose}/>;
+  if (stage === 'loading') return <LoadingOverlay title="Analisando imagem..." sub="Gemini detectando produtos e preços"/>;
+  if (stage === 'error') return (
+    <div className="screen-container">
+      <div className="topbar">
+        <button className="icon-btn" onClick={onClose}><Icon name="back" size={18}/></button>
+        <div className="brand" style={{ fontSize:15 }}>Erro na análise</div>
+        <div style={{width:38}}/>
+      </div>
+      <div className="screen">
+        <div className="card" style={{ textAlign:'center', padding:32 }}>
+          <div style={{ fontWeight:600, marginBottom:8 }}>Não foi possível analisar a imagem</div>
+          <div className="muted small" style={{ marginBottom:24 }}>{errMsg}</div>
+          <button className="btn primary block" onClick={onClose}>Voltar</button>
+        </div>
+      </div>
+    </div>
+  );
+  return <GondolaReview result={result} onSave={onDone} onCancel={onClose}/>;
 }
 
 function LoadingOverlay({ title, sub }) {
