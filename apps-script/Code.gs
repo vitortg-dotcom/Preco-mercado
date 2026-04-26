@@ -39,7 +39,8 @@ function handleRequest(e) {
     }
 
     // Auth opcional: se apiToken configurado na planilha, exige token
-    const token = (e.parameter && e.parameter.token) || p.token || '';
+    // Token vem apenas do body (nunca da URL, para não aparecer nos logs)
+    const token = p.token || '';
     checkAuth(token);
 
     // Rate limit apenas quando há token
