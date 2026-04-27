@@ -163,11 +163,23 @@ function ScanQRFlow({ onDone, onClose }) {
   const [errMsg, setErr]  = useStateCam('');
   const [linkUrl, setLinkUrl] = useStateCam('');
 
-  const submit = async (qrUrl) => {
-    if (!qrUrl || !qrUrl.trim()) return;
+  const submit = async (rawUrl) => {
+    if (!rawUrl || !rawUrl.trim()) return;
+    const qrUrl = rawUrl.trim();
     setStage('loading');
     try {
-      const data = await window.API.call('scan_nfe', { qrUrl: qrUrl.trim() });
+      // Try fetching the SEFAZ page directly from the browser (Brazilian IP).
+      // Some states block Google's servers — browser fetch works around that.
+      let payload = { qrUrl };
+      try {
+        const browserResp = await fetch(qrUrl, { mode: 'cors' });
+        if (browserResp.ok) {
+          const html = await browserResp.text();
+          if (html.length > 500) payload.html = html; // got real content
+        }
+      } catch (_) { /* CORS blocked — backend will fetch instead */ }
+
+      const data = await window.API.call('scan_nfe', payload);
       setNfe(data);
       setStage('review');
     } catch (e) {
