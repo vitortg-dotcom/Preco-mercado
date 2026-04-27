@@ -161,11 +161,13 @@ function ScanQRFlow({ onDone, onClose }) {
   const [stage, setStage] = useStateCam('camera');
   const [nfe, setNfe]     = useStateCam(null);
   const [errMsg, setErr]  = useStateCam('');
+  const [linkUrl, setLinkUrl] = useStateCam('');
 
-  const capture = async ({ qrUrl }) => {
+  const submit = async (qrUrl) => {
+    if (!qrUrl || !qrUrl.trim()) return;
     setStage('loading');
     try {
-      const data = await window.API.call('scan_nfe', { qrUrl });
+      const data = await window.API.call('scan_nfe', { qrUrl: qrUrl.trim() });
       setNfe(data);
       setStage('review');
     } catch (e) {
@@ -174,24 +176,61 @@ function ScanQRFlow({ onDone, onClose }) {
     }
   };
 
-  if (stage === 'camera')     return <CameraScreen mode="qr" onCapture={capture} onClose={onClose}/>;
+  if (stage === 'camera') return (
+    <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
+      <CameraScreen mode="qr" onCapture={({ qrUrl }) => submit(qrUrl)} onClose={onClose}/>
+      <div style={{
+        position:'fixed', bottom:0, left:0, right:0, zIndex:300,
+        background:'rgba(10,10,8,0.92)', padding:'12px 16px 28px',
+        borderTop:'1px solid rgba(255,255,255,0.1)'
+      }}>
+        <div style={{ fontSize:12, color:'rgba(255,255,255,0.5)', marginBottom:8, textAlign:'center' }}>
+          Ou cole o link da nota abaixo
+        </div>
+        <div style={{ display:'flex', gap:8 }}>
+          <input
+            value={linkUrl}
+            onChange={e => setLinkUrl(e.target.value)}
+            placeholder="https://nfce.sefaz.XX.gov.br/..."
+            style={{
+              flex:1, padding:'10px 12px', borderRadius:10, border:'1px solid rgba(255,255,255,0.2)',
+              background:'rgba(255,255,255,0.08)', color:'#fff', fontSize:13, outline:'none'
+            }}
+          />
+          <button
+            onClick={() => submit(linkUrl)}
+            disabled={!linkUrl.trim()}
+            style={{
+              padding:'10px 16px', borderRadius:10, border:'none', cursor:'pointer',
+              background: linkUrl.trim() ? 'var(--primary)' : 'rgba(255,255,255,0.1)',
+              color:'#fff', fontWeight:600, fontSize:13, whiteSpace:'nowrap'
+            }}
+          >
+            Buscar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (stage === 'loading')    return <LoadingOverlay title="Consultando SEFAZ..." sub="Importando itens da nota"/>;
   if (stage === 'foto-nota')  return <ScanFotoNotaFlow onDone={onDone} onClose={onClose}/>;
   if (stage === 'error') return (
     <div className="screen-container">
       <div className="topbar">
         <button className="icon-btn" onClick={onClose}><Icon name="back" size={18}/></button>
-        <div className="brand" style={{ fontSize:15 }}>Link do QR quebrado</div>
+        <div className="brand" style={{ fontSize:15 }}>Erro na leitura</div>
         <div style={{width:38}}/>
       </div>
       <div className="screen">
         <div className="card" style={{ textAlign:'center', padding:32 }}>
-          <div style={{ fontWeight:600, marginBottom:8 }}>SEFAZ não respondeu</div>
+          <div style={{ fontWeight:600, marginBottom:8 }}>Não foi possível ler a nota</div>
           <div className="muted small" style={{ marginBottom:24 }}>{errMsg}</div>
           <button className="btn primary block" onClick={() => setStage('foto-nota')}>
             <Icon name="camera" size={16}/> Fotografar a nota impressa
           </button>
-          <button className="btn block" style={{ marginTop:10 }} onClick={onClose}>Cancelar</button>
+          <button className="btn block" style={{ marginTop:10 }} onClick={() => { setErr(''); setStage('camera'); }}>Tentar escanear de novo</button>
+          <button className="btn block" style={{ marginTop:6 }} onClick={onClose}>Cancelar</button>
         </div>
       </div>
     </div>
