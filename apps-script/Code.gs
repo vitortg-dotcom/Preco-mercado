@@ -417,7 +417,12 @@ function scanNfe(qrUrl, htmlFromClient) {
       .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
       .replace(/\s+/g, ' ').trim();
 
-    Logger.log('Texto extraído do SEFAZ (' + texto.length + ' chars): ' + texto.substring(0, 300));
+    Logger.log('Texto extraído do SEFAZ (' + texto.length + ' chars): ' + texto.substring(0, 500));
+
+    // If we still got a very short text, the second fetch also failed
+    if (texto.length < 200) {
+      return { error: true, mensagem: 'SEFAZ não retornou dados da nota (texto curto: "' + texto.substring(0, 100) + '"). Tente fotografar a nota.' };
+    }
 
     const prompt = `Você recebeu o texto de uma NFC-e brasileira extraído da página do SEFAZ.
 Retorne APENAS JSON válido, sem markdown, sem explicações.
