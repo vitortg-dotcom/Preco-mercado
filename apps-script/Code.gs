@@ -348,20 +348,50 @@ function scanNfe(qrUrl, htmlFromClient) {
       html = htmlFromClient;
       Logger.log('HTML do cliente: ' + html.length + ' chars');
     } else {
-      // Fetch server-side (works for most states, blocked by some like GO)
-      const resp = UrlFetchApp.fetch(qrUrl, {
-        followRedirects: true,
-        muteHttpExceptions: true,
-        timeout: 15000,
+      // Fetch server-side
+      const fetchOpts = {
+        followRedirects: true, muteHttpExceptions: true, timeout: 15000,
         headers: {
           'User-Agent':      'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36',
           'Accept':          'text/html,application/xhtml+xml',
           'Accept-Language': 'pt-BR,pt;q=0.9',
         }
-      });
+      };
+      const resp = UrlFetchApp.fetch(qrUrl, fetchOpts);
       const status = resp.getResponseCode();
       if (status !== 200) return { error: true, mensagem: 'SEFAZ retornou ' + status + '. Tente fotografar a nota.' };
       html = resp.getContentText('UTF-8');
+
+      // Some states return a JS shell page that embeds the real DANFE URL in an
+      // iframe or a ShowDanfeNFCe() call. Detect this and follow to the real URL.
+      const textoRapido = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (textoRapido.length < 500) {
+        Logger.log('Shell page detectada (' + textoRapido.length + ' chars). Buscando URL real...');
+        const baseUrl = qrUrl.match(/^(https?:\/\/[^\/]+)/i)[1];
+        const patterns = [
+          /'([^']*render\/html\/[^']*(?:danfe|nfce)[^']*)'/i,
+          /"([^"]*render\/html\/[^"]*(?:danfe|nfce)[^"]*)"/i,
+          /iframe[^>]+src="([^"]*(?:danfe|nfce)[^"]*)"/i,
+          /iframe[^>]+src='([^']*(?:danfe|nfce)[^']*)'/i,
+        ];
+        let directUrl = null;
+        for (var pi = 0; pi < patterns.length; pi++) {
+          const m = html.match(patterns[pi]);
+          if (m) { directUrl = m[1]; break; }
+        }
+        if (directUrl) {
+          // Strip jsessionid from path (not needed for direct fetch)
+          directUrl = directUrl.replace(/;jsessionid=[^?&]*/i, '');
+          if (!directUrl.match(/^https?:\/\//i)) directUrl = baseUrl + directUrl;
+          Logger.log('URL real encontrada: ' + directUrl);
+          try {
+            const r2 = UrlFetchApp.fetch(directUrl, fetchOpts);
+            if (r2.getResponseCode() === 200) html = r2.getContentText('UTF-8');
+          } catch (e2) { Logger.log('Falha na URL real: ' + e2.message); }
+        } else {
+          Logger.log('URL real não encontrada no shell.');
+        }
+      }
     }
 
     // Strip scripts, styles and HTML tags so Gemini gets dense text content
