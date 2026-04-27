@@ -59,6 +59,7 @@ function handleRequest(e) {
       scan_nfe:           () => scanNfe(p.qrUrl, p.html),
       ocr_gondola:        () => ocrGondola(p.imageBase64),
       ocr_nota:           () => ocrNota(p.imageBase64),
+      version:            () => ({ ok: true, version: 'v5', ts: new Date().toISOString() }),
     };
 
     if (!action) throw new Error('Parâmetro "action" ausente na URL');
@@ -402,14 +403,18 @@ function scanNfe(qrUrl, htmlFromClient) {
             Logger.log('Status URL real: ' + r2.getResponseCode());
             if (r2.getResponseCode() === 200) {
               html = r2.getContentText('UTF-8');
-              // SEFAZ-GO has a third level: the render/html page is still a navigation
-              // wrapper (short text). Follow the "detalhada" / danfe link inside it.
+              // SEFAZ-GO has a third level: render/html returns a navigation wrapper.
               const texto2 = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-              Logger.log('Texto nivel 2 (' + texto2.length + ' chars): ' + texto2.substring(0, 200));
+              Logger.log('Texto nivel 2 (' + texto2.length + ' chars): ' + texto2.substring(0, 300));
               if (texto2.length < 600) {
+                // Log full HTML so we can diagnose link structure in Execuções
+                Logger.log('HTML nivel 2 COMPLETO: ' + html);
+
+                // Strategy A: find href/action links in the navigation page
                 const p3list = [
-                  /href="([^"]*(?:detalhada|danfe|nfce|visualizar)[^"]*)"/i,
-                  /href='([^']*(?:detalhada|danfe|nfce|visualizar)[^']*)'/i,
+                  /href="([^"]*(?:detalhada|impressao|imprimir|danfe|nfce|visualizar)[^"]*)"/i,
+                  /href='([^']*(?:detalhada|impressao|imprimir|danfe|nfce|visualizar)[^']*)'/i,
+                  /action="([^"]*(?:danfe|nfce)[^"]*)"/i,
                   /'([^']*render\/html\/[^']*)'/i,
                   /"([^"]*render\/html\/[^"]*)"/i,
                 ];
@@ -418,6 +423,39 @@ function scanNfe(qrUrl, htmlFromClient) {
                   const m3 = html.match(p3list[p3i]);
                   if (m3) { thirdUrl = m3[1]; break; }
                 }
+                if (thirdUrl) Logger.log('Terceiro URL (via href): ' + thirdUrl);
+
+                // Strategy B: if no href found, try known SEFAZ-GO URL patterns directly
+                if (!thirdUrl) {
+                  const chNFeM = directUrl.match(/chNFe=([A-Za-z0-9]+)/i);
+                  if (chNFeM) {
+                    const chNFe = chNFeM[1];
+                    const candidates = [
+                      baseUrl + '/nfeweb/sites/nfce/danfeNFCeDetalhada?chNFe=' + chNFe,
+                      baseUrl + '/nfeweb/sites/nfce/danfeNFCeImpressao?chNFe='  + chNFe,
+                      baseUrl + '/nfeweb/sites/nfce/render/html/danfeNFCeDetalhada?chNFe=' + chNFe,
+                    ];
+                    for (var ci = 0; ci < candidates.length; ci++) {
+                      let cu = candidates[ci];
+                      if (jsessionid) {
+                        const qic = cu.indexOf('?');
+                        cu = cu.substring(0, qic) + ';jsessionid=' + jsessionid + cu.substring(qic);
+                      }
+                      Logger.log('Candidata nivel 3: ' + cu);
+                      try {
+                        const rc = UrlFetchApp.fetch(cu, fetchOpts);
+                        const tc = rc.getContentText('UTF-8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                        Logger.log('Candidata: status=' + rc.getResponseCode() + ' chars=' + tc.length + ' | ' + tc.substring(0, 150));
+                        if (rc.getResponseCode() === 200 && tc.length > 500) {
+                          html = rc.getContentText('UTF-8');
+                          break;
+                        }
+                      } catch(ec) { Logger.log('Candidata falhou: ' + ec.message); }
+                    }
+                  }
+                }
+
+                // Follow href link if strategy A found one
                 if (thirdUrl) {
                   thirdUrl = thirdUrl.replace(/;jsessionid=[^?&]*/i, '');
                   if (!thirdUrl.match(/^https?:\/\//i)) thirdUrl = baseUrl + thirdUrl;
@@ -427,14 +465,12 @@ function scanNfe(qrUrl, htmlFromClient) {
                       ? thirdUrl.substring(0, qi3) + ';jsessionid=' + jsessionid + thirdUrl.substring(qi3)
                       : thirdUrl + ';jsessionid=' + jsessionid;
                   }
-                  Logger.log('Terceiro URL: ' + thirdUrl);
+                  Logger.log('Seguindo terceiro URL: ' + thirdUrl);
                   try {
                     const r3 = UrlFetchApp.fetch(thirdUrl, fetchOpts);
                     Logger.log('Status terceiro URL: ' + r3.getResponseCode());
                     if (r3.getResponseCode() === 200) html = r3.getContentText('UTF-8');
                   } catch (e3) { Logger.log('Falha no terceiro URL: ' + e3.message); }
-                } else {
-                  Logger.log('Terceiro URL não encontrado. HTML nivel 2: ' + html.substring(0, 500));
                 }
               }
             }
@@ -627,6 +663,23 @@ function callGemini(prompt, imageBase64, mimeType) {
   } catch (_) {
     throw new Error('Falha ao processar resposta da IA. Tente novamente.');
   }
+}
+
+// ============================================================
+// FUNÇÕES DE TESTE — execute diretamente no editor (não via web)
+// ============================================================
+
+function testarGoias() {
+  // Cole aqui a URL do QR code que você quer testar
+  const url = 'https://nfeweb.sefaz.go.gov.br/nfeweb/sites/nfce/danfeNFCe?p=52260406057223054344650050001390011051726683%7C3%7C1';
+  Logger.log('=== TESTE SEFAZ-GO ===');
+  const result = scanNfe(url, null);
+  Logger.log('RESULTADO FINAL: ' + JSON.stringify(result).substring(0, 3000));
+}
+
+function verificarVersao() {
+  Logger.log('Versão: v5 — ' + new Date().toISOString());
+  Logger.log('Planilha: ' + SPREADSHEET_ID);
 }
 
 // ============================================================

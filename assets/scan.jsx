@@ -46,7 +46,7 @@ function CameraScreen({ mode, onCapture, onClose }) {
     return () => { active = false; stopAll(); };
   }, []);
 
-  // QR scan loop — crop to reticle area + contrast boost for dense NFC-e codes
+  // QR scan loop — tries 3 crop sizes per frame, higher contrast, faster interval
   useEffectCam(() => {
     if (!ready || mode !== 'qr') return;
     let active = true;
@@ -59,37 +59,39 @@ function CameraScreen({ mode, onCapture, onClose }) {
         rafRef.current = requestAnimationFrame(scan); return;
       }
 
-      // Crop to center 75% — where the reticle sits; ignores distracting edges
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-      const cw = Math.round(vw * 0.75);
-      const ch = Math.round(vh * 0.75);
-      const cx = Math.round((vw - cw) / 2);
-      const cy = Math.round((vh - ch) / 2);
-      canvas.width  = cw;
-      canvas.height = ch;
+      const vw  = video.videoWidth;
+      const vh  = video.videoHeight;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, cx, cy, cw, ch, 0, 0, cw, ch);
 
-      // Contrast boost: converts to grayscale + stretches range
-      // helps jsQR with faded prints, shadows and mixed lighting
-      const imageData = ctx.getImageData(0, 0, cw, ch);
-      const px = imageData.data;
-      for (let i = 0; i < px.length; i += 4) {
-        const gray = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
-        const v = Math.min(255, Math.max(0, (gray - 128) * 1.4 + 128));
-        px[i] = px[i + 1] = px[i + 2] = v;
-      }
+      // Three crop sizes per frame: tight center → wide → full frame.
+      // Dense NFC-e QR codes read best when they fill the canvas, so we try
+      // the smallest crop first (highest relative resolution for the QR).
+      const fracs = [0.6, 0.8, 1.0];
+      for (let fi = 0; fi < fracs.length; fi++) {
+        const f  = fracs[fi];
+        const cw = Math.round(vw * f);
+        const ch = Math.round(vh * f);
+        canvas.width  = cw;
+        canvas.height = ch;
+        ctx.drawImage(video, Math.round((vw - cw) / 2), Math.round((vh - ch) / 2), cw, ch, 0, 0, cw, ch);
 
-      const code = jsQR(imageData.data, cw, ch, { inversionAttempts: 'attemptBoth' });
-      if (code && code.data) {
-        active = false;
-        stopAll();
-        onCapture({ qrUrl: code.data });
-        return;
+        const imageData = ctx.getImageData(0, 0, cw, ch);
+        const px = imageData.data;
+        for (let i = 0; i < px.length; i += 4) {
+          const g = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+          px[i] = px[i + 1] = px[i + 2] = Math.min(255, Math.max(0, (g - 128) * 1.6 + 128));
+        }
+
+        const code = jsQR(imageData.data, cw, ch, { inversionAttempts: 'attemptBoth' });
+        if (code && code.data) {
+          active = false;
+          stopAll();
+          onCapture({ qrUrl: code.data });
+          return;
+        }
       }
-      // 200ms gives the autofocus time to settle between attempts
-      setTimeout(() => { if (active) { rafRef.current = requestAnimationFrame(scan); } }, 200);
+      // 150ms — shorter than before but still lets autofocus settle
+      setTimeout(() => { if (active) rafRef.current = requestAnimationFrame(scan); }, 150);
     };
 
     rafRef.current = requestAnimationFrame(scan);
