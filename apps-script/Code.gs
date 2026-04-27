@@ -400,7 +400,44 @@ function scanNfe(qrUrl, htmlFromClient) {
           try {
             const r2 = UrlFetchApp.fetch(directUrl, fetchOpts);
             Logger.log('Status URL real: ' + r2.getResponseCode());
-            if (r2.getResponseCode() === 200) html = r2.getContentText('UTF-8');
+            if (r2.getResponseCode() === 200) {
+              html = r2.getContentText('UTF-8');
+              // SEFAZ-GO has a third level: the render/html page is still a navigation
+              // wrapper (short text). Follow the "detalhada" / danfe link inside it.
+              const texto2 = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              Logger.log('Texto nivel 2 (' + texto2.length + ' chars): ' + texto2.substring(0, 200));
+              if (texto2.length < 600) {
+                const p3list = [
+                  /href="([^"]*(?:detalhada|danfe|nfce|visualizar)[^"]*)"/i,
+                  /href='([^']*(?:detalhada|danfe|nfce|visualizar)[^']*)'/i,
+                  /'([^']*render\/html\/[^']*)'/i,
+                  /"([^"]*render\/html\/[^"]*)"/i,
+                ];
+                let thirdUrl = null;
+                for (var p3i = 0; p3i < p3list.length; p3i++) {
+                  const m3 = html.match(p3list[p3i]);
+                  if (m3) { thirdUrl = m3[1]; break; }
+                }
+                if (thirdUrl) {
+                  thirdUrl = thirdUrl.replace(/;jsessionid=[^?&]*/i, '');
+                  if (!thirdUrl.match(/^https?:\/\//i)) thirdUrl = baseUrl + thirdUrl;
+                  if (jsessionid) {
+                    const qi3 = thirdUrl.indexOf('?');
+                    thirdUrl = qi3 !== -1
+                      ? thirdUrl.substring(0, qi3) + ';jsessionid=' + jsessionid + thirdUrl.substring(qi3)
+                      : thirdUrl + ';jsessionid=' + jsessionid;
+                  }
+                  Logger.log('Terceiro URL: ' + thirdUrl);
+                  try {
+                    const r3 = UrlFetchApp.fetch(thirdUrl, fetchOpts);
+                    Logger.log('Status terceiro URL: ' + r3.getResponseCode());
+                    if (r3.getResponseCode() === 200) html = r3.getContentText('UTF-8');
+                  } catch (e3) { Logger.log('Falha no terceiro URL: ' + e3.message); }
+                } else {
+                  Logger.log('Terceiro URL não encontrado. HTML nivel 2: ' + html.substring(0, 500));
+                }
+              }
+            }
           } catch (e2) { Logger.log('Falha na URL real: ' + e2.message); }
         } else {
           Logger.log('URL real não encontrada no shell.');
@@ -419,8 +456,8 @@ function scanNfe(qrUrl, htmlFromClient) {
 
     Logger.log('Texto extraído do SEFAZ (' + texto.length + ' chars): ' + texto.substring(0, 500));
 
-    // If we still got a very short text, the second fetch also failed
-    if (texto.length < 200) {
+    // If we still got a very short text, the SEFAZ chain failed entirely
+    if (texto.length < 60) {
       return { error: true, mensagem: 'SEFAZ não retornou dados da nota (texto curto: "' + texto.substring(0, 100) + '"). Tente fotografar a nota.' };
     }
 
