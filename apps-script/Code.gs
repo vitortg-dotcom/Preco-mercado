@@ -368,6 +368,12 @@ function scanNfe(qrUrl, htmlFromClient) {
       if (textoRapido.length < 500) {
         Logger.log('Shell page detectada (' + textoRapido.length + ' chars). Buscando URL real...');
         const baseUrl = qrUrl.match(/^(https?:\/\/[^\/]+)/i)[1];
+
+        // Extract jsessionid from first response — Java apps embed it in all resource URLs
+        const sessionMatch = html.match(/;jsessionid=([A-Za-z0-9._:-]+)/i);
+        const jsessionid = sessionMatch ? sessionMatch[1] : null;
+        if (jsessionid) Logger.log('jsessionid extraído: ' + jsessionid.substring(0, 20) + '...');
+
         const patterns = [
           /'([^']*render\/html\/[^']*(?:danfe|nfce)[^']*)'/i,
           /"([^"]*render\/html\/[^"]*(?:danfe|nfce)[^"]*)"/i,
@@ -380,12 +386,20 @@ function scanNfe(qrUrl, htmlFromClient) {
           if (m) { directUrl = m[1]; break; }
         }
         if (directUrl) {
-          // Strip jsessionid from path (not needed for direct fetch)
+          // Strip any existing jsessionid, then reattach the one from the first response
+          // so the Java server recognises this as the same session (URL-based session tracking)
           directUrl = directUrl.replace(/;jsessionid=[^?&]*/i, '');
           if (!directUrl.match(/^https?:\/\//i)) directUrl = baseUrl + directUrl;
+          if (jsessionid) {
+            const qi = directUrl.indexOf('?');
+            directUrl = qi !== -1
+              ? directUrl.substring(0, qi) + ';jsessionid=' + jsessionid + directUrl.substring(qi)
+              : directUrl + ';jsessionid=' + jsessionid;
+          }
           Logger.log('URL real encontrada: ' + directUrl);
           try {
             const r2 = UrlFetchApp.fetch(directUrl, fetchOpts);
+            Logger.log('Status URL real: ' + r2.getResponseCode());
             if (r2.getResponseCode() === 200) html = r2.getContentText('UTF-8');
           } catch (e2) { Logger.log('Falha na URL real: ' + e2.message); }
         } else {
