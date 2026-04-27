@@ -56,7 +56,7 @@ function handleRequest(e) {
       add_lista_item:     () => addListaItem(p),
       toggle_lista_item:  () => toggleListaItem(p.id),
       remove_lista_item:  () => removeListaItem(p.id),
-      scan_nfe:           () => scanNfe(p.qrUrl),
+      scan_nfe:           () => scanNfe(p.qrUrl, p.html),
       ocr_gondola:        () => ocrGondola(p.imageBase64),
       ocr_nota:           () => ocrNota(p.imageBase64),
     };
@@ -320,7 +320,7 @@ function removeListaItem(id) {
 // SCAN NFE — Nota Fiscal Eletrônica via SEFAZ
 // ============================================================
 
-function scanNfe(qrUrl) {
+function scanNfe(qrUrl, htmlFromClient) {
   if (!qrUrl) return { error: true, mensagem: 'qrUrl não fornecida' };
 
   // Sanitize: strip control chars + encode literal | pipes common in NFC-e QR codes
@@ -342,21 +342,27 @@ function scanNfe(qrUrl) {
   if (bloqueados.some(r => r.test(hostname))) return { error: true, mensagem: 'URL não permitida' };
 
   try {
-    const resp = UrlFetchApp.fetch(qrUrl, {
-      followRedirects: true,
-      muteHttpExceptions: true,
-      timeout: 15000,
-      headers: {
-        'User-Agent':      'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36',
-        'Accept':          'text/html,application/xhtml+xml',
-        'Accept-Language': 'pt-BR,pt;q=0.9',
-      }
-    });
-
-    const status = resp.getResponseCode();
-    if (status !== 200) return { error: true, mensagem: 'SEFAZ retornou ' + status + '. Tente fotografar a nota.' };
-
-    const html = resp.getContentText('UTF-8');
+    let html;
+    if (htmlFromClient && htmlFromClient.length > 500) {
+      // Browser fetched the page with a Brazilian IP — use that HTML directly
+      html = htmlFromClient;
+      Logger.log('HTML do cliente: ' + html.length + ' chars');
+    } else {
+      // Fetch server-side (works for most states, blocked by some like GO)
+      const resp = UrlFetchApp.fetch(qrUrl, {
+        followRedirects: true,
+        muteHttpExceptions: true,
+        timeout: 15000,
+        headers: {
+          'User-Agent':      'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36',
+          'Accept':          'text/html,application/xhtml+xml',
+          'Accept-Language': 'pt-BR,pt;q=0.9',
+        }
+      });
+      const status = resp.getResponseCode();
+      if (status !== 200) return { error: true, mensagem: 'SEFAZ retornou ' + status + '. Tente fotografar a nota.' };
+      html = resp.getContentText('UTF-8');
+    }
 
     // Strip scripts, styles and HTML tags so Gemini gets dense text content
     // instead of markup — fits much more data within the character limit
