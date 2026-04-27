@@ -365,10 +365,18 @@ function scanNfe(qrUrl, htmlFromClient) {
 
       // Some states return a JS shell page that embeds the real DANFE URL in an
       // iframe or a ShowDanfeNFCe() call. Detect this and follow to the real URL.
-      const textoRapido = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      if (textoRapido.length < 500) {
-        Logger.log('Shell page detectada (' + textoRapido.length + ' chars). Buscando URL real...');
+      // Must strip <script> tags first — inline JS inflates char count and caused
+      // shell detection to silently skip when textoRapido counted JS code as text.
+      const textoRapido = html
+        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (textoRapido.length < 600) {
+        Logger.log('Shell/nav detectada (' + textoRapido.length + ' chars): ' + textoRapido.substring(0, 150));
         const baseUrl = qrUrl.match(/^(https?:\/\/[^\/]+)/i)[1];
+        // Extract 44-digit chNFe from QR URL params (?p=CHAVE|3|1)
+        const chNFeQr = (qrUrl.match(/[?&]p=([0-9]{44})/i) || [])[1] || null;
+        if (chNFeQr) Logger.log('chNFe da URL: ' + chNFeQr.substring(0, 12) + '...');
 
         // Extract jsessionid from first response — Java apps embed it in all resource URLs
         const sessionMatch = html.match(/;jsessionid=([A-Za-z0-9._:-]+)/i);
@@ -425,11 +433,10 @@ function scanNfe(qrUrl, htmlFromClient) {
                 }
                 if (thirdUrl) Logger.log('Terceiro URL (via href): ' + thirdUrl);
 
-                // Strategy B: if no href found, try known SEFAZ-GO URL patterns directly
+                // Strategy B: try known SEFAZ-GO URL patterns directly (also uses chNFe from QR URL)
                 if (!thirdUrl) {
-                  const chNFeM = directUrl.match(/chNFe=([A-Za-z0-9]+)/i);
-                  if (chNFeM) {
-                    const chNFe = chNFeM[1];
+                  const chNFe = (directUrl.match(/chNFe=([0-9]{44})/i)||[])[1] || chNFeQr;
+                  if (chNFe) {
                     const candidates = [
                       baseUrl + '/nfeweb/sites/nfce/danfeNFCeDetalhada?chNFe=' + chNFe,
                       baseUrl + '/nfeweb/sites/nfce/danfeNFCeImpressao?chNFe='  + chNFe,
@@ -441,12 +448,14 @@ function scanNfe(qrUrl, htmlFromClient) {
                         const qic = cu.indexOf('?');
                         cu = cu.substring(0, qic) + ';jsessionid=' + jsessionid + cu.substring(qic);
                       }
-                      Logger.log('Candidata nivel 3: ' + cu);
+                      Logger.log('Candidata: ' + cu);
                       try {
                         const rc = UrlFetchApp.fetch(cu, fetchOpts);
-                        const tc = rc.getContentText('UTF-8').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-                        Logger.log('Candidata: status=' + rc.getResponseCode() + ' chars=' + tc.length + ' | ' + tc.substring(0, 150));
-                        if (rc.getResponseCode() === 200 && tc.length > 500) {
+                        const tc = rc.getContentText('UTF-8')
+                          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                          .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                        Logger.log('→ status=' + rc.getResponseCode() + ' chars=' + tc.length + ' | ' + tc.substring(0, 150));
+                        if (rc.getResponseCode() === 200 && tc.length > 300) {
                           html = rc.getContentText('UTF-8');
                           break;
                         }
@@ -476,7 +485,27 @@ function scanNfe(qrUrl, htmlFromClient) {
             }
           } catch (e2) { Logger.log('Falha na URL real: ' + e2.message); }
         } else {
-          Logger.log('URL real não encontrada no shell.');
+          Logger.log('URL real não encontrada no shell. Tentando candidatas com chNFe...');
+          // Shell page has no extractable URL — try candidates directly using chNFe from QR
+          if (chNFeQr) {
+            const sessB = (html.match(/;jsessionid=([A-Za-z0-9._:-]+)/i)||[])[1] || null;
+            const candsB = [
+              baseUrl + '/nfeweb/sites/nfce/danfeNFCeDetalhada?chNFe=' + chNFeQr,
+              baseUrl + '/nfeweb/sites/nfce/danfeNFCeImpressao?chNFe='  + chNFeQr,
+              baseUrl + '/nfeweb/sites/nfce/render/html/danfeNFCeDetalhada?chNFe=' + chNFeQr,
+            ];
+            for (var cbI = 0; cbI < candsB.length; cbI++) {
+              let ub = candsB[cbI];
+              if (sessB) { const qb = ub.indexOf('?'); ub = ub.substring(0,qb)+';jsessionid='+sessB+ub.substring(qb); }
+              Logger.log('Candidata (sem directUrl): ' + ub);
+              try {
+                const rb = UrlFetchApp.fetch(ub, fetchOpts);
+                const tb = rb.getContentText('UTF-8').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+                Logger.log('→ status=' + rb.getResponseCode() + ' chars=' + tb.length + ' | ' + tb.substring(0,100));
+                if (rb.getResponseCode() === 200 && tb.length > 300) { html = rb.getContentText('UTF-8'); break; }
+              } catch(eb) { Logger.log('Candidata B falhou: ' + eb.message); }
+            }
+          }
         }
       }
     }
