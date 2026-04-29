@@ -363,6 +363,25 @@ function scanNfe(qrUrl, htmlFromClient) {
       if (status !== 200) return { error: true, mensagem: 'SEFAZ retornou ' + status + '. Tente fotografar a nota.' };
       html = resp.getContentText('UTF-8');
 
+      // Capture session cookie from first response — Java portals check the Cookie header
+      // on API endpoints even when they use URL-based jsessionid for static resources.
+      // UrlFetchApp does NOT forward cookies automatically, so we do it manually.
+      var sessionCookie = '';
+      try {
+        var allHdrs = resp.getAllHeaders();
+        var rawCk = allHdrs['Set-Cookie'] || allHdrs['set-cookie'] || [];
+        sessionCookie = (Array.isArray(rawCk) ? rawCk : [rawCk])
+          .map(function(c){ return c.split(';')[0]; }).join('; ');
+        if (sessionCookie) Logger.log('Cookie capturado: ' + sessionCookie.substring(0, 60));
+      } catch(ckErr) { Logger.log('Aviso: não foi possível capturar cookie: ' + ckErr.message); }
+      // Merge cookie into fetchOpts for all subsequent requests in this chain
+      var fetchOptsC = sessionCookie
+        ? { followRedirects: fetchOpts.followRedirects, muteHttpExceptions: fetchOpts.muteHttpExceptions,
+            timeout: fetchOpts.timeout,
+            headers: { 'User-Agent': fetchOpts.headers['User-Agent'], 'Accept': fetchOpts.headers['Accept'],
+                       'Accept-Language': fetchOpts.headers['Accept-Language'], 'Cookie': sessionCookie } }
+        : fetchOpts;
+
       // Some states return a JS shell page that embeds the real DANFE URL in an
       // iframe or a ShowDanfeNFCe() call. Detect this and follow to the real URL.
       // Must strip <script> tags first — inline JS inflates char count and caused
@@ -407,18 +426,17 @@ function scanNfe(qrUrl, htmlFromClient) {
           }
           Logger.log('URL real encontrada: ' + directUrl);
           try {
-            const r2 = UrlFetchApp.fetch(directUrl, fetchOpts);
+            const r2 = UrlFetchApp.fetch(directUrl, fetchOptsC);
             Logger.log('Status URL real: ' + r2.getResponseCode());
             if (r2.getResponseCode() === 200) {
               html = r2.getContentText('UTF-8');
-              // SEFAZ-GO has a third level: render/html returns a navigation wrapper.
-              const texto2 = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              const texto2 = html
+                .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+                .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
               Logger.log('Texto nivel 2 (' + texto2.length + ' chars): ' + texto2.substring(0, 300));
               if (texto2.length < 600) {
-                // Log full HTML so we can diagnose link structure in Execuções
-                Logger.log('HTML nivel 2 COMPLETO: ' + html);
-
-                // Strategy A: find href/action links in the navigation page
+                Logger.log('HTML nivel 2: ' + html);
+                // Strategy A: href links in navigation page
                 const p3list = [
                   /href="([^"]*(?:detalhada|impressao|imprimir|danfe|nfce|visualizar)[^"]*)"/i,
                   /href='([^']*(?:detalhada|impressao|imprimir|danfe|nfce|visualizar)[^']*)'/i,
@@ -433,7 +451,7 @@ function scanNfe(qrUrl, htmlFromClient) {
                 }
                 if (thirdUrl) Logger.log('Terceiro URL (via href): ' + thirdUrl);
 
-                // Strategy B: try known SEFAZ-GO URL patterns directly (also uses chNFe from QR URL)
+                // Strategy B: candidate URLs with chNFe + cookie
                 if (!thirdUrl) {
                   const chNFe = (directUrl.match(/chNFe=([0-9]{44})/i)||[])[1] || chNFeQr;
                   if (chNFe) {
@@ -444,39 +462,25 @@ function scanNfe(qrUrl, htmlFromClient) {
                     ];
                     for (var ci = 0; ci < candidates.length; ci++) {
                       let cu = candidates[ci];
-                      if (jsessionid) {
-                        const qic = cu.indexOf('?');
-                        cu = cu.substring(0, qic) + ';jsessionid=' + jsessionid + cu.substring(qic);
-                      }
+                      if (jsessionid) { const qic = cu.indexOf('?'); cu = cu.substring(0,qic)+';jsessionid='+jsessionid+cu.substring(qic); }
                       Logger.log('Candidata: ' + cu);
                       try {
-                        const rc = UrlFetchApp.fetch(cu, fetchOpts);
-                        const tc = rc.getContentText('UTF-8')
-                          .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-                          .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-                        Logger.log('→ status=' + rc.getResponseCode() + ' chars=' + tc.length + ' | ' + tc.substring(0, 150));
-                        if (rc.getResponseCode() === 200 && tc.length > 300) {
-                          html = rc.getContentText('UTF-8');
-                          break;
-                        }
+                        const rc = UrlFetchApp.fetch(cu, fetchOptsC);
+                        const tc = rc.getContentText('UTF-8').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+                        Logger.log('→ status=' + rc.getResponseCode() + ' chars=' + tc.length + ' | ' + tc.substring(0,150));
+                        if (rc.getResponseCode() === 200 && tc.length > 300) { html = rc.getContentText('UTF-8'); break; }
                       } catch(ec) { Logger.log('Candidata falhou: ' + ec.message); }
                     }
                   }
                 }
-
-                // Follow href link if strategy A found one
+                // Follow href link (strategy A)
                 if (thirdUrl) {
                   thirdUrl = thirdUrl.replace(/;jsessionid=[^?&]*/i, '');
                   if (!thirdUrl.match(/^https?:\/\//i)) thirdUrl = baseUrl + thirdUrl;
-                  if (jsessionid) {
-                    const qi3 = thirdUrl.indexOf('?');
-                    thirdUrl = qi3 !== -1
-                      ? thirdUrl.substring(0, qi3) + ';jsessionid=' + jsessionid + thirdUrl.substring(qi3)
-                      : thirdUrl + ';jsessionid=' + jsessionid;
-                  }
+                  if (jsessionid) { const qi3 = thirdUrl.indexOf('?'); thirdUrl = qi3!==-1 ? thirdUrl.substring(0,qi3)+';jsessionid='+jsessionid+thirdUrl.substring(qi3) : thirdUrl+';jsessionid='+jsessionid; }
                   Logger.log('Seguindo terceiro URL: ' + thirdUrl);
                   try {
-                    const r3 = UrlFetchApp.fetch(thirdUrl, fetchOpts);
+                    const r3 = UrlFetchApp.fetch(thirdUrl, fetchOptsC);
                     Logger.log('Status terceiro URL: ' + r3.getResponseCode());
                     if (r3.getResponseCode() === 200) html = r3.getContentText('UTF-8');
                   } catch (e3) { Logger.log('Falha no terceiro URL: ' + e3.message); }
@@ -485,25 +489,23 @@ function scanNfe(qrUrl, htmlFromClient) {
             }
           } catch (e2) { Logger.log('Falha na URL real: ' + e2.message); }
         } else {
-          Logger.log('URL real não encontrada no shell. Tentando candidatas com chNFe...');
-          // Shell page has no extractable URL — try candidates directly using chNFe from QR
+          Logger.log('URL real não encontrada no shell. Tentando candidatas diretas...');
           if (chNFeQr) {
             const sessB = (html.match(/;jsessionid=([A-Za-z0-9._:-]+)/i)||[])[1] || null;
             const candsB = [
               baseUrl + '/nfeweb/sites/nfce/danfeNFCeDetalhada?chNFe=' + chNFeQr,
               baseUrl + '/nfeweb/sites/nfce/danfeNFCeImpressao?chNFe='  + chNFeQr,
-              baseUrl + '/nfeweb/sites/nfce/render/html/danfeNFCeDetalhada?chNFe=' + chNFeQr,
             ];
             for (var cbI = 0; cbI < candsB.length; cbI++) {
               let ub = candsB[cbI];
               if (sessB) { const qb = ub.indexOf('?'); ub = ub.substring(0,qb)+';jsessionid='+sessB+ub.substring(qb); }
-              Logger.log('Candidata (sem directUrl): ' + ub);
+              Logger.log('Candidata direta: ' + ub);
               try {
-                const rb = UrlFetchApp.fetch(ub, fetchOpts);
+                const rb = UrlFetchApp.fetch(ub, fetchOptsC);
                 const tb = rb.getContentText('UTF-8').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
                 Logger.log('→ status=' + rb.getResponseCode() + ' chars=' + tb.length + ' | ' + tb.substring(0,100));
                 if (rb.getResponseCode() === 200 && tb.length > 300) { html = rb.getContentText('UTF-8'); break; }
-              } catch(eb) { Logger.log('Candidata B falhou: ' + eb.message); }
+              } catch(eb) { Logger.log('Candidata direta falhou: ' + eb.message); }
             }
           }
         }
