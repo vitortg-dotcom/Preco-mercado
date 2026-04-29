@@ -523,9 +523,13 @@ function scanNfe(qrUrl, htmlFromClient) {
 
     Logger.log('Texto extraído do SEFAZ (' + texto.length + ' chars): ' + texto.substring(0, 500));
 
-    // If we still got a very short text, the SEFAZ chain failed entirely
+    // Detect SEFAZ-GO (and similar states) session-IP lock — server returns XML FAILURE
+    // when the session was created from a different IP. Nothing to do server-side.
+    if (texto.indexOf('FAILURE') !== -1 && texto.length < 60) {
+      return { error: true, mensagem: 'Este estado (possivelmente Goiás) bloqueia consultas fora do navegador do usuário. Use "Fotografar a nota impressa" para importar.' };
+    }
     if (texto.length < 60) {
-      return { error: true, mensagem: 'SEFAZ não retornou dados da nota (texto curto: "' + texto.substring(0, 100) + '"). Tente fotografar a nota.' };
+      return { error: true, mensagem: 'SEFAZ não retornou dados da nota. Tente fotografar a nota impressa.' };
     }
 
     const prompt = `Você recebeu o texto de uma NFC-e brasileira extraído da página do SEFAZ.

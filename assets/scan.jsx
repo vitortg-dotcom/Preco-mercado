@@ -239,7 +239,10 @@ function ScanQRFlow({ onDone, onClose }) {
       <div className="screen">
         <div className="card" style={{ textAlign:'center', padding:32 }}>
           <div style={{ fontWeight:600, marginBottom:8 }}>Não foi possível ler a nota</div>
-          <div className="muted small" style={{ marginBottom:24 }}>{errMsg}</div>
+          <div className="muted small" style={{ marginBottom:20 }}>{errMsg}</div>
+          <div style={{ background:'var(--bg-2)', borderRadius:10, padding:'12px 16px', marginBottom:20, textAlign:'left', fontSize:13 }}>
+            <strong>Alternativa:</strong> fotografe o cupom impresso — o Gemini lê o texto e importa os itens automaticamente.
+          </div>
           <button className="btn primary block" onClick={() => setStage('foto-nota')}>
             <Icon name="camera" size={16}/> Fotografar a nota impressa
           </button>
